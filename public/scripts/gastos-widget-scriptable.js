@@ -95,9 +95,12 @@ const colorFor = (hex) => new Color(hex || "#6b7280", 1)
 // ============================================================
 function buildSmall(w, data) {
   const s = data.summary
-  const title = w.addText("Gastos · " + (data.period.month || "Mes"))
+  const periodLabel = (data.period && (data.period.label || data.period.month)) || "Período"
+  const title = w.addText("Gastos · " + periodLabel)
   title.font = Font.boldSystemFont(12)
   title.textColor = Color.gray()
+  title.lineLimit = 1
+  title.minimumScaleFactor = 0.6
 
   w.addSpacer(4)
 
@@ -133,15 +136,18 @@ function buildSmall(w, data) {
 // ============================================================
 function buildMedium(w, data) {
   const s = data.summary
+  const periodLabel = (data.period && (data.period.label || data.period.month)) || ""
 
   const header = w.addStack()
   const headerTitle = header.addText("Gastos App")
   headerTitle.font = Font.boldSystemFont(13)
   headerTitle.textColor = Color.gray()
   header.addSpacer()
-  const month = header.addText(data.period.month || "")
+  const month = header.addText(periodLabel)
   month.font = Font.systemFont(11)
   month.textColor = Color.gray()
+  month.lineLimit = 1
+  month.minimumScaleFactor = 0.7
 
   w.addSpacer(6)
 
@@ -233,6 +239,7 @@ function buildMedium(w, data) {
 // ============================================================
 function buildLarge(w, data) {
   const s = data.summary
+  const periodLabel = (data.period && (data.period.label || data.period.month)) || ""
 
   // Header
   const header = w.addStack()
@@ -240,9 +247,11 @@ function buildLarge(w, data) {
   t.font = Font.boldSystemFont(14)
   t.textColor = Color.gray()
   header.addSpacer()
-  const m = header.addText(data.period.month || "")
-  m.font = Font.systemFont(12)
+  const m = header.addText(periodLabel)
+  m.font = Font.systemFont(11)
   m.textColor = Color.gray()
+  m.lineLimit = 1
+  m.minimumScaleFactor = 0.7
 
   w.addSpacer(8)
 

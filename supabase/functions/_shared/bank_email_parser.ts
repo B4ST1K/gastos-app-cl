@@ -16,8 +16,11 @@ export interface ParsedTransaction {
 
 const KNOWN_BANK_EMAILS = [
   '@bancoestado.cl',
+  '@correo.bancoestado.cl',
   '@santander.cl',
+  '@correo.santander.cl',
   '@bci.cl',
+  '@correo.bci.cl',
   '@itau.cl',
   '@scotiabank.cl',
   '@bancofalabella.cl',
@@ -27,6 +30,7 @@ const KNOWN_BANK_EMAILS = [
   '@liderbip.cl',
   '@mach.cl',
   '@kun.cl',
+  '@gmail.com',
 ]
 
 const CLP_NUM_REGEX_STRINGS = [

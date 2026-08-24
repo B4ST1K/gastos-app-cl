@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { formatCurrencyPlain, formatDate, getCategoryName } from '@/lib/types'
+import { getBillingPeriod } from '@/lib/billing'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -9,6 +10,7 @@ export const runtime = 'nodejs'
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
 const WIDGET_API_KEY = process.env.WIDGET_API_KEY || ''
+const BILLING_DAY = Number(process.env.BILLING_DAY || 25)
 
 export async function GET(req: NextRequest) {
   try {
@@ -75,35 +77,33 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'No user_id' }, { status: 401 })
     }
 
-    const now = new Date()
-    const firstOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
-      .toISOString()
-      .slice(0, 10)
-    const lastOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0))
-      .toISOString()
-      .slice(0, 10)
+    const period = getBillingPeriod(BILLING_DAY)
+    const rangeFrom = period.iso.start.slice(0, 10)
+    const rangeTo = period.iso.end.slice(0, 10)
 
-    const [txMonthRes, catsRes, pmsRes, lastTxsRes] = await Promise.all([
+    const [txPeriodRes, catsRes, pmsRes, lastTxsRes] = await Promise.all([
       supabase
         .from('transactions')
         .select('id,type,amount,category_id,transaction_date')
         .eq('user_id', userId)
-        .gte('transaction_date', firstOfMonth)
-        .lte('transaction_date', lastOfMonth),
+        .gte('transaction_date', rangeFrom)
+        .lte('transaction_date', rangeTo),
       supabase.from('categories').select('id,name,type,color,icon'),
       supabase.from('payment_methods').select('id,name'),
       supabase
         .from('transactions')
         .select('id,type,amount,merchant,description,transaction_date,category_id,payment_method_id,source')
         .eq('user_id', userId)
+        .gte('transaction_date', rangeFrom)
+        .lte('transaction_date', rangeTo)
         .order('transaction_date', { ascending: false })
         .order('created_at', { ascending: false })
         .limit(5),
     ])
 
-    if (txMonthRes.error) {
+    if (txPeriodRes.error) {
       return NextResponse.json(
-        { ok: false, error: `DB error month: ${txMonthRes.error.message}` },
+        { ok: false, error: `DB error period (25-25): ${txPeriodRes.error.message}` },
         { status: 500 },
       )
     }
@@ -113,7 +113,7 @@ export async function GET(req: NextRequest) {
     const pmsMap = new Map<string, { id: string; name: string }>()
     if (pmsRes.data) (pmsRes.data as any[]).forEach((p) => pmsMap.set(p.id, p))
 
-    const txs = (txMonthRes.data || []) as any[]
+    const txs = (txPeriodRes.data || []) as any[]
     const totalExpense = txs.filter((t) => t.type === 'expense').reduce((s, t) => s + Number(t.amount || 0), 0)
     const totalIncome = txs.filter((t) => t.type === 'income').reduce((s, t) => s + Number(t.amount || 0), 0)
     const balance = totalIncome - totalExpense
@@ -161,16 +161,19 @@ export async function GET(req: NextRequest) {
       }
     })
 
-    const monthLabel = new Intl.DateTimeFormat('es-CL', { month: 'long', year: 'numeric' }).format(now)
     const updatedAt = new Date().toISOString()
 
     const payload = {
       ok: true,
       updated_at: updatedAt,
       period: {
-        month: monthLabel,
-        from: firstOfMonth,
-        to: lastOfMonth,
+        label: period.label,
+        billing_day: BILLING_DAY,
+        month: period.label, // backward compat
+        from: rangeFrom,
+        to: rangeTo,
+        from_iso: period.iso.start,
+        to_iso: period.iso.end,
       },
       summary: {
         total_income: totalIncome,
