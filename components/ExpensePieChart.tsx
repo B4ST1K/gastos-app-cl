@@ -138,7 +138,6 @@ export default function ExpensePieChart({ data }: ExpensePieChartProps) {
               </Pie>
               <Tooltip content={<CustomTooltip />} />
               <Legend
-                content={renderLegend}
                 verticalAlign="middle"
                 align="right"
                 layout="vertical"
