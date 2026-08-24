@@ -4,7 +4,10 @@ import { NextResponse, type NextRequest } from 'next/server'
 export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname
 
-  const isPublicApi = pathname.startsWith('/api/widget-summary')
+  const isPublicApi =
+    pathname.startsWith('/api/widget-summary') ||
+    pathname.startsWith('/api/transaction')
+
   const isAuthPage =
     pathname.startsWith('/login') ||
     pathname.startsWith('/register') ||
