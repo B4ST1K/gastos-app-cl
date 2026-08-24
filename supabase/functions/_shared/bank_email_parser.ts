@@ -96,13 +96,22 @@ function extractAmount(subject: string, body: string): { amount: number; currenc
 }
 
 const MERCHANT_PATTERNS = [
-  /(?:Compra|Cargo|Pago|Gasto)\s*(?:realizado|efectuado|efectuada)?\s*(?:en|a|por|con|en|a favor de)\s*[:]?\s*["']?([^\n\r<\]]{3,60}?)["']?\s*(?:$|\n|\r|\.|,|;|\(|\[|\s{2,})/i,
-  /(?:en|local|Comercio|Establecimiento)\s*[:]\s*["']?([^\n\r<\]]{3,60}?)["']?\s*(?:$|\n|\r|\.|,|;|\(|\[|\s{2,})/i,
-  /(?:Realizaste|Tienes un)\s*?[^\n\r]*?\s+en\s+([A-ZÀ-Ú0-9][^\n\r<\]]{2,60}?)[.\s-]{3,}/i,
+  // "Compra por $9.990 en UBER" — no capturar el monto como comercio
+  /(?:compra|cargo|pago|gasto|consumo)[^\n]{0,80}?\$\s*[\d.]{1,12}(?:,\d{1,2})?\s+(?:en|a)\s+["']?([A-ZÁÉÍÓÚÑa-záéíóúñ0-9][^\n\r<]{1,50}?)["']?(?=$|\n|\r|\.|,|;|\s{2,})/i,
+  /(?:comercio|establecimiento|local)\s*[:\-]\s*["']?([^\n\r<]{2,60}?)["']?/i,
+  /(?:realizaste|tienes un)[^\n]{0,80}?\s+en\s+([A-ZÀ-Ú0-9][^\n\r<]{2,50}?)(?:\.|$|\n)/i,
 ]
 
+function isPlausibleMerchant(name: string): boolean {
+  if (name.length < 2 || name.length > 80) return false
+  if (/^\$/.test(name)) return false
+  if (/^[\d.\s,]+$/.test(name)) return false
+  if (/bancoestado|notificaci[oó]n/i.test(name)) return false
+  return true
+}
+
 function extractMerchant(subject: string, body: string): string | null {
-  const candidates = [subject, body.slice(0, 2000)]
+  const candidates = [subject, body.slice(0, 4000)]
   for (const text of candidates) {
     for (const rx of MERCHANT_PATTERNS) {
       const m = text.match(rx)
@@ -111,7 +120,7 @@ function extractMerchant(subject: string, body: string): string | null {
           .replace(/\s+/g, ' ')
           .replace(/[.\-_,;()\[\]]+$/g, '')
           .trim()
-        if (cleaned.length >= 2 && cleaned.length <= 80) return cleaned
+        if (isPlausibleMerchant(cleaned)) return cleaned
       }
     }
   }
