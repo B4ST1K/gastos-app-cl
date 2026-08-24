@@ -7,7 +7,7 @@
 //   -> Guarda en parsed_emails para deduplicar por gmail_message_id
 // ================================================================
 
-import { parseBankEmail } from "../_shared/bank_email_parser.ts"
+import { parseBankEmailDetailed } from "../_shared/bank_email_parser.ts"
 import {
   createAdminSupabase,
   refreshGoogleAccessToken,
@@ -294,14 +294,14 @@ async function processOneAccount(
     }
 
     const r = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=full`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     )
     const msg = (await r.json()) as {
       id: string
       threadId?: string
       internalDate?: string
-      payload?: { headers?: Array<{ name: string; value: string }> }
+      payload?: GmailPayload
       snippet?: string
       error?: unknown
     }
@@ -322,13 +322,23 @@ async function processOneAccount(
       : dateHeader ? new Date(dateHeader) : new Date()
 
     const bodyPreview = msg.snippet ?? ""
+    const fullBody = decodeGmailPayload(msg.payload) || bodyPreview
 
-    const parsed = parseBankEmail({ from, subject, bodyPreview, receivedAt })
+    const parseResult = parseBankEmailDetailed({
+      from,
+      subject,
+      bodyPreview,
+      body: fullBody,
+      receivedAt,
+    })
+    const parsed = parseResult.ok ? parseResult.parsed : null
 
     item.from = from
     item.subject = subject
     item.snippet = opts.verbose ? bodyPreview.slice(0, 300) : undefined
-    item.bank_match = parsed ? true : false
+    item.body_chars = opts.verbose ? fullBody.length : undefined
+    item.bank_match = parseResult.bank_match
+    if (!parseResult.ok) item.skip_reason = parseResult.reason
 
     const parsedInsert = {
       user_id: userId,
@@ -344,13 +354,13 @@ async function processOneAccount(
       transaction_type: parsed?.transaction_type ?? null,
       payment_method_name: parsed?.payment_method_name ?? null,
       raw_subject: subject,
-      raw_body_preview: bodyPreview.slice(0, 2000),
+      raw_body_preview: (fullBody || bodyPreview).slice(0, 2000),
       confidence: parsed?.confidence ?? 0,
     }
 
     if (!parsed) {
       skippedCount++
-      item.result = "not_a_bank_email"
+      item.result = parseResult.ok ? "not_a_bank_email" : parseResult.reason
       processedIds.push(item)
       if (!opts.dryRun) {
         await supabase.from("parsed_emails").insert(parsedInsert as Record<string, unknown>)
@@ -469,4 +479,57 @@ async function processOneAccount(
     query_used: queryUsed,
     messages_found: messageIds.length,
   }
+}
+
+type GmailPayload = {
+  mimeType?: string
+  headers?: Array<{ name: string; value: string }>
+  body?: { data?: string }
+  parts?: GmailPayload[]
+}
+
+function base64UrlDecode(data: string): string {
+  const b64 = data.replace(/-/g, "+").replace(/_/g, "/")
+  const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4))
+  try {
+    return atob(b64 + pad)
+  } catch {
+    return ""
+  }
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#\d+;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function decodeGmailPayload(payload?: GmailPayload): string {
+  if (!payload) return ""
+  const texts: string[] = []
+  const htmls: string[] = []
+
+  function walk(p?: GmailPayload) {
+    if (!p) return
+    const mime = (p.mimeType ?? "").toLowerCase()
+    const data = p.body?.data
+    if (data) {
+      const decoded = base64UrlDecode(data)
+      if (mime.includes("text/plain")) texts.push(decoded)
+      else if (mime.includes("text/html")) htmls.push(stripHtml(decoded))
+      else if (!mime.startsWith("multipart/")) texts.push(stripHtml(decoded))
+    }
+    for (const part of p.parts ?? []) walk(part)
+  }
+
+  walk(payload)
+  return [...texts, ...htmls].join("\n").trim()
 }

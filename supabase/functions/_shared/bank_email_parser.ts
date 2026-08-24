@@ -14,24 +14,30 @@ export interface ParsedTransaction {
   confidence: number
 }
 
-const KNOWN_BANK_EMAILS = [
-  '@bancoestado.cl',
-  '@correo.bancoestado.cl',
-  '@santander.cl',
-  '@correo.santander.cl',
-  '@bci.cl',
-  '@correo.bci.cl',
-  '@itau.cl',
-  '@scotiabank.cl',
-  '@bancofalabella.cl',
-  '@bancoconsorcio.cl',
-  '@ripley.cl',
-  '@tenpo.cl',
-  '@liderbip.cl',
-  '@mach.cl',
-  '@kun.cl',
-  '@gmail.com',
+export type ParseSkipReason = 'not_bank' | 'no_subject' | 'no_amount'
+
+export type ParseBankEmailResult =
+  | { ok: true; parsed: ParsedTransaction; bank_match: true }
+  | { ok: false; reason: ParseSkipReason; bank_match: boolean }
+
+// Dominios (sin @). También matchea subdominios: correo.bancoestado.cl
+const KNOWN_BANK_DOMAINS = [
+  'bancoestado.cl',
+  'santander.cl',
+  'bci.cl',
+  'itau.cl',
+  'scotiabank.cl',
+  'bancofalabella.cl',
+  'bancoconsorcio.cl',
+  'ripley.cl',
+  'tenpo.cl',
+  'liderbip.cl',
+  'mach.cl',
+  'kun.cl',
 ]
+
+const BANK_SUBJECT_HINT =
+  /bancoestado|santander|banco\s*bci|\bbci\b|ita[uú]|scotiabank|falabella|consorcio|ripley|tenpo|lider\s*b?ip|\bmach\b|\bkun\b|notificaci[oó]n de (compra|cargo|pago|transferencia|abono)/i
 
 const CLP_NUM_REGEX_STRINGS = [
   // $ 10.500 ; $120.000 ; $5.230,00 ; CLP 100.000
@@ -187,10 +193,24 @@ function extractPaymentMethod(subject: string, body: string): string | undefined
   return undefined
 }
 
-function isBankEmail(from: string): boolean {
-  if (!from) return false
-  const lower = from.toLowerCase()
-  return KNOWN_BANK_EMAILS.some((d) => lower.includes(d))
+function hostMatchesBank(host: string): boolean {
+  const h = host.toLowerCase().replace(/^www\./, '')
+  return KNOWN_BANK_DOMAINS.some((d) => h === d || h.endsWith('.' + d))
+}
+
+function extractHosts(text: string): string[] {
+  const hosts: string[] = []
+  const re = /@([a-z0-9.-]+\.[a-z]{2,})/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) hosts.push(m[1].toLowerCase())
+  return hosts
+}
+
+export function isBankNotification(from: string, subject: string, body: string): boolean {
+  const haystack = `${from}\n${subject}\n${body}`
+  if (extractHosts(haystack).some(hostMatchesBank)) return true
+  if (BANK_SUBJECT_HINT.test(subject)) return true
+  return false
 }
 
 export function parseBankEmail(params: {
@@ -200,14 +220,26 @@ export function parseBankEmail(params: {
   body?: string | null
   receivedAt?: Date | null
 }): ParsedTransaction | null {
+  const result = parseBankEmailDetailed(params)
+  return result.ok ? result.parsed : null
+}
+
+export function parseBankEmailDetailed(params: {
+  from: string
+  subject: string
+  bodyPreview?: string | null
+  body?: string | null
+  receivedAt?: Date | null
+}): ParseBankEmailResult {
   const { from, subject, body, bodyPreview, receivedAt } = params
-
-  if (!isBankEmail(from)) return null
-  if (!subject) return null
-
   const safeBody = body ?? bodyPreview ?? ''
+  const bankMatch = isBankNotification(from, subject, safeBody)
+
+  if (!bankMatch) return { ok: false, reason: 'not_bank', bank_match: false }
+  if (!subject) return { ok: false, reason: 'no_subject', bank_match: true }
+
   const amountInfo = extractAmount(subject, safeBody)
-  if (!amountInfo) return null
+  if (!amountInfo) return { ok: false, reason: 'no_amount', bank_match: true }
 
   const merchant = extractMerchant(subject, safeBody) ?? 'Comercio'
   const { transaction_type, confidence } = extractType(subject, safeBody)
@@ -222,12 +254,16 @@ export function parseBankEmail(params: {
   )
 
   return {
-    merchant,
-    amount: amountInfo.amount,
-    currency: amountInfo.currency,
-    transaction_date,
-    transaction_type,
-    payment_method_name,
-    confidence: Math.round(totalConfidence * 1000) / 1000,
+    ok: true,
+    bank_match: true,
+    parsed: {
+      merchant,
+      amount: amountInfo.amount,
+      currency: amountInfo.currency,
+      transaction_date,
+      transaction_type,
+      payment_method_name,
+      confidence: Math.round(totalConfidence * 1000) / 1000,
+    },
   }
 }
