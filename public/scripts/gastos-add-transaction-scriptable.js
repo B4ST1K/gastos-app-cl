@@ -151,25 +151,67 @@ async function pushTransaction({ amount, merchant, description, type, payment_me
 // Interfaz: si recibe args desde Atajo o desde Scriptable
 // ============================================================
 
+const DEBUG = false // 👈 Pon en TRUE para ver pop-up de qué datos se recibieron (luego vuelve a FALSE)
+
 async function main() {
-  // 1) Obtener entrada (Atajo le pasa args por args.queryParameters o args.plainText)
+  // 1) Obtener entrada DESDE TODAS LAS FUENTES POSIBLES (en orden de prioridad)
   let input = ""
   let isNotification = false
   let source = "iphone-shortcut"
+  let inputSrc = "none"
 
-  if (args && args.plainText && String(args.plainText).trim().length > 0) {
-    input = String(args.plainText).trim()
-    isNotification = true
-    source = "iphone-notification"
-  } else if (args && args.queryParameters && (args.queryParameters.text || args.queryParameters.notification)) {
-    input = String(args.queryParameters.text || args.queryParameters.notification).trim()
-    isNotification = true
-    source = "iphone-notification"
-  } else if (args && args.fileURLs && args.fileURLs.length > 0) {
+  // Método A: args desde Shortcut (Run Script con parámetro / Share Sheet)
+  if (args) {
+    const pt = args.plainText ? String(args.plainText) : ""
+    const qpText = args.queryParameters ? String(args.queryParameters.text || args.queryParameters.notification || "") : ""
+    const wpText = args.widgetParameter ? String(args.widgetParameter) : ""
+    const bpText = args.bookmarkPath ? String(args.bookmarkPath) : ""
+
+    if (pt.trim().length > 0) {
+      input = pt.trim()
+      inputSrc = "args.plainText"
+    } else if (qpText.trim().length > 0) {
+      input = qpText.trim()
+      inputSrc = "args.queryParameters"
+    } else if (wpText.trim().length > 0) {
+      input = wpText.trim()
+      inputSrc = "args.widgetParameter"
+    } else if (bpText.trim().length > 0) {
+      input = bpText.trim()
+      inputSrc = "args.bookmarkPath"
+    }
+
+    if (args.fileURLs && args.fileURLs.length > 0 && !input) {
+      try {
+        const fm = FileManager.local()
+        input = args.fileURLs.map((u) => { try { return fm.readString(u) } catch { return "" } }).join("\n").trim()
+        if (input) inputSrc = "args.fileURLs"
+      } catch {}
+    }
+  }
+
+  // Método B: PORTAPAPELES (CLIPBOARD) — el MÁS FIABLE si viene de compartir / copiar
+  if (!input) {
     try {
-      const fm = FileManager.local()
-      input = args.fileURLs.map((u) => fm.readString(u)).join("\n")
+      const clip = Pasteboard.pasteString()
+      if (clip && String(clip).trim().length > 0 && looksLikeTransactionText(String(clip))) {
+        input = String(clip).trim()
+        inputSrc = "clipboard"
+      }
     } catch {}
+  }
+
+  if (input && input.length > 0) {
+    isNotification = true
+    source = inputSrc === "clipboard" ? "iphone-clipboard" : "iphone-notification"
+  }
+
+  if (DEBUG) {
+    const a = new Alert()
+    a.title = "DEBUG: Input recibido"
+    a.message = `src=${inputSrc}\nlen=${input.length}\n\n---\n${(input || "(vacio)").slice(0, 400)}`
+    a.addAction("OK")
+    await a.presentAlert()
   }
 
   // 2) Parsear si hay input o pedir datos
@@ -187,11 +229,15 @@ async function main() {
     description = input.length > 10 ? input.slice(0, 300) : null
   }
 
-  // 3) Confirmación interactiva (dentro de Scriptable o si faltan datos)
-  if (!config.runsInWidget || !amount || amount <= 0 || !merchant) {
+  // 3) Confirmación interactiva (siempre dentro de Scriptable, o si faltan datos)
+  if (true) {
     const q = new Alert()
-    q.title = source.includes("notific") ? "Añadir desde notificación" : "Añadir transacción"
-    q.message = input ? `Texto recibido:\n${input.slice(0,200)}\n\nMonto detectado: ${amount ? "$" + amount.toLocaleString("es-CL") : "?"}\nComercio: ${merchant || "?"}` : "Ingresa los datos"
+    q.title = source.includes("notific") || source === "iphone-clipboard"
+      ? (inputSrc === "clipboard" ? "Añadir desde portapapeles" : "Añadir desde notificación")
+      : "Añadir transacción"
+    q.message = input
+      ? `Fuente: ${inputSrc}\nTexto:\n${input.slice(0,200)}\n\nMonto detectado: ${amount ? "$" + amount.toLocaleString("es-CL") : "?"}\nComercio: ${merchant || "?"}`
+      : `No llegó ningún texto (src=${inputSrc}). Ingresa los datos manualmente:`
     q.addTextField("Monto (CLP)", amount ? String(amount) : "")
     q.addTextField("Comercio", merchant || "")
     q.addTextField("Descripción (opc)", description || "")
@@ -237,9 +283,17 @@ async function main() {
 
   // Salida para Shortcut (devuelve texto resumen)
   Script.setShortcutOutput(
-    JSON.stringify({ ok: true, amount, merchant, type, transaction_id: res.transaction?.id, duplicated: !!res.duplicate })
+    JSON.stringify({ ok: true, amount, merchant, type, transaction_id: res.transaction?.id, duplicated: !!res.duplicate, inputSrc })
   )
   return res
+}
+
+function looksLikeTransactionText(s) {
+  if (!s || typeof s !== "string" || s.trim().length < 6) return false
+  const txt = s.toLowerCase()
+  // Si tiene un formato de monto CLP o palabras típicas de transacción, damos por bueno
+  return /\$/.test(s) || /\b\d{4,}\b/.test(s) ||
+    /(paga(st|ste)|compra|cargo|abono|transferenc|debito|débito|crédito|credito)/.test(txt)
 }
 
 try {
