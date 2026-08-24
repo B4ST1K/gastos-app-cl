@@ -15,10 +15,11 @@ const cleanAppUrl = CONFIG.APP_URL.replace(/\/+$/, "")
 const useBearer = CONFIG.BEARER_TOKEN && CONFIG.BEARER_TOKEN.length > 0 && CONFIG.BEARER_TOKEN.startsWith("eyJ")
 
 const widgetApi = () => {
+  const cacheBuster = `&_v=${Date.now()}`
   if (useBearer) {
-    return `${cleanAppUrl}/api/widget-summary`
+    return `${cleanAppUrl}/api/widget-summary?${cacheBuster.slice(1)}`
   }
-  return `${cleanAppUrl}/api/widget-summary?api_key=${encodeURIComponent(CONFIG.API_KEY)}&user_id=${encodeURIComponent(CONFIG.USER_ID)}`
+  return `${cleanAppUrl}/api/widget-summary?api_key=${encodeURIComponent(CONFIG.API_KEY)}&user_id=${encodeURIComponent(CONFIG.USER_ID)}${cacheBuster}`
 }
 
 const loadData = async () => {
@@ -361,13 +362,13 @@ async function createWidget() {
     const h = w.addText("Revisa CONFIG del script")
     h.font = Font.systemFont(9)
     h.textColor = Color.lightGray()
-    w.refreshAfterDate = new Date(Date.now() + 5 * 60 * 1000)
+    w.refreshAfterDate = new Date(Date.now() + 2 * 60 * 1000)
     return w
   }
 
   const family = config.widgetFamily || "medium"
   const w = new ListWidget()
-  w.refreshAfterDate = new Date(Date.now() + 10 * 60 * 1000)
+  w.refreshAfterDate = new Date(Date.now() + 2 * 60 * 1000)
   w.setPadding(14, 14, 14, 14)
 
   if (family === "small") buildSmall(w, data)

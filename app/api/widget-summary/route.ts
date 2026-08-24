@@ -197,7 +197,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(payload, {
       status: 200,
       headers: {
-        'Cache-Control': 's-maxage=60, stale-while-revalidate=300',
+        'Cache-Control': 's-maxage=15, stale-while-revalidate=30',
       },
     })
   } catch (e: any) {
