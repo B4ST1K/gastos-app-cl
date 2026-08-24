@@ -1,0 +1,8 @@
+# Supabase
+.branches
+.temp
+DEPLOY_INSTRUCCIONES.ps1
+# dotenvx
+.env.keys
+.env.local
+.env.*.local
