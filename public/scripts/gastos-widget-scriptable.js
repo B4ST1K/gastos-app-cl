@@ -13,27 +13,20 @@
 // 👇👇👇 COMPLETA ESTOS 3 (o 4) CAMPOS ANTES DE USAR 👇👇👇
 
 const CONFIG = {
-  // URL de tu app en Vercel (sin barra al final).
-  // Si pruebas local: "http://192.168.x.x:3000"
-  APP_URL: "https://TU-PROYECTO.vercel.app",
+  // URL de tu app en Vercel. Puedes dejar la barra al final o no,
+  // el script la limpia automáticamente.
+  APP_URL: "https://gastos-app-cl.vercel.app/",
 
-  // MODO AUTENTICACIÓN — USA UNO DE LOS DOS:
+  // MODO AUTENTICACIÓN — USA UNO DE LOS DOS.
+  // RECOMENDADO: Opción B (no caduca). Deja BEARER_TOKEN = "".
   // ---------------------------------------------------------------
-  // OPCIÓN A) Bearer JWT (más seguro, 1 usuario tú mismo).
-  // Cómo obtenerlo: abre tu app, inicia sesión, Abre DevTools
-  // Application / Storage / Cookies / nombre: sb-xxx-auth-token
-  // Copia el valor JSON y el campo access_token. Pégalo aquí.
-  // Caduca en 1h (lo renueva Scriptable si le pasas refresh token).
-  // ---------------------------------------------------------------
-  BEARER_TOKEN: "",  // access_token de Supabase (sb-xxx-auth-token)
+  // OPCIÓN A) Bearer JWT. DEBE EMPEZAR POR "eyJ" (los JWT empiezan así).
+  // Cualquier cosa que no empiece por eyJ será ignorada y se usará Opción B.
+  BEARER_TOKEN: "",
 
-  // OPCIÓN B) API KEY + USER_ID (simple para 1 usuario sin rotación).
-  // Cómo: en Vercel project settings env vars agrega WIDGET_API_KEY
-  // (una contraseña que tú inventes). Luego USER_ID = tu UUID auth.users
-  // Desventaja: si alguien saca la apikey, ve tus datos. Ventaja:
-  // no tienes que renovar el token cada hora.
-  API_KEY: "",       // WIDGET_API_KEY que pusiste en Vercel
-  USER_ID: "",       // Tu user_id (UUID auth.users)
+  // OPCIÓN B) API KEY + USER_ID (recomendado — sin caducidad).
+  API_KEY: "Bastian1920!",       // WIDGET_API_KEY de Vercel
+  USER_ID: "4ae48a03-3a43-4015-a106-3386b7966e24",   // Tu UUID de auth.users
   // 👆👆👆 termina configuración 👆👆👆
 }
 
@@ -41,21 +34,64 @@ const CONFIG = {
 // Endpoints
 // ============================================================
 
+const cleanAppUrl = CONFIG.APP_URL.replace(/\/+$/, "")
+
+const useBearer = CONFIG.BEARER_TOKEN && CONFIG.BEARER_TOKEN.length > 0 && CONFIG.BEARER_TOKEN.startsWith("eyJ")
+
 const widgetApi = () => {
-  if (CONFIG.BEARER_TOKEN && CONFIG.BEARER_TOKEN.length > 0) {
-    return `${CONFIG.APP_URL}/api/widget-summary`
+  if (useBearer) {
+    return `${cleanAppUrl}/api/widget-summary`
   }
-  return `${CONFIG.APP_URL}/api/widget-summary?api_key=${encodeURIComponent(CONFIG.API_KEY)}&user_id=${encodeURIComponent(CONFIG.USER_ID)}`
+  return `${cleanAppUrl}/api/widget-summary?api_key=${encodeURIComponent(CONFIG.API_KEY)}&user_id=${encodeURIComponent(CONFIG.USER_ID)}`
 }
 
 const loadData = async () => {
-  const req = new Request(widgetApi())
-  if (CONFIG.BEARER_TOKEN && CONFIG.BEARER_TOKEN.length > 0) {
-    req.headers = { Authorization: `Bearer ${CONFIG.BEARER_TOKEN}` }
+  const url = widgetApi()
+  const req = new Request(url)
+  if (useBearer) {
+    req.headers = {
+      Authorization: `Bearer ${CONFIG.BEARER_TOKEN}`,
+      "Accept": "application/json",
+    }
+  } else {
+    req.headers = { "Accept": "application/json" }
   }
   req.timeoutInterval = 15
-  const res = await req.loadJSON()
-  return res
+
+  let rawText = ""
+  try {
+    rawText = await req.loadString()
+  } catch (netErr) {
+    throw new Error("Red fallida: " + (netErr?.message || String(netErr)))
+  }
+
+  const status = req?.response?.statusCode || 0
+  const ct = (req?.response?.headers || {})["Content-Type"] || (req?.response?.headers || {})["content-type"] || ""
+
+  let parsed = null
+  let parseErr = null
+  try {
+    parsed = JSON.parse(rawText)
+  } catch (e) {
+    parseErr = e?.message || String(e)
+  }
+
+  if (status < 200 || status >= 300) {
+    const msg = [
+      `HTTP ${status}`,
+      parseErr ? " (no JSON)" : "",
+      parseErr ? "" : (parsed?.ok === false ? ` → ${parsed?.error || ""}` : ""),
+    ].join("")
+    const snippet = (rawText || "").slice(0, 80).replace(/\s+/g, " ")
+    throw new Error(`${msg}. ${snippet ? "Respuesta: " + snippet : ""}`)
+  }
+
+  if (!parsed) {
+    const snippet = (rawText || "").slice(0, 100).replace(/\s+/g, " ")
+    throw new Error(`Respuesta no es JSON (CT=${ct || "?"}). Primeros chars: ${snippet}`)
+  }
+
+  return parsed
 }
 
 // ============================================================
@@ -363,7 +399,7 @@ async function createWidget() {
   else buildMedium(w, data)
 
   // Tap widget abre la app
-  w.url = CONFIG.APP_URL + "/"
+  w.url = cleanAppUrl + "/"
 
   return w
 }
