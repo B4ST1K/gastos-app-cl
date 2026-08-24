@@ -1,33 +1,9 @@
-// ============================================================
-// Widget Gastos App - Scriptable iOS
-// ============================================================
-// Cómo usar:
-//   1. Instala Scriptable (gratis) en la App Store.
-//   2. Crea un nuevo script vacío, borra TODO y pega este texto.
-//   3. En la línea CONFIGURACIÓN abajo pon tus datos.
-//   4. Guarda el script con nombre "Gastos Widget".
-//   5. Ve a la Home del iPhone, mantén pulsado -> + -> Scriptable.
-//   6. Selecciona el script "Gastos Widget" y el tamaño.
-// ============================================================
-
-// 👇👇👇 COMPLETA ESTOS 3 (o 4) CAMPOS ANTES DE USAR 👇👇👇
-
 const CONFIG = {
-  // URL de tu app en Vercel. Puedes dejar la barra al final o no,
-  // el script la limpia automáticamente.
   APP_URL: "https://gastos-app-cl.vercel.app/",
-
-  // MODO AUTENTICACIÓN — USA UNO DE LOS DOS.
-  // RECOMENDADO: Opción B (no caduca). Deja BEARER_TOKEN = "".
-  // ---------------------------------------------------------------
-  // OPCIÓN A) Bearer JWT. DEBE EMPEZAR POR "eyJ" (los JWT empiezan así).
-  // Cualquier cosa que no empiece por eyJ será ignorada y se usará Opción B.
-  BEARER_TOKEN: "",
-
-  // OPCIÓN B) API KEY + USER_ID (recomendado — sin caducidad).
-  API_KEY: "Bastian1920!",       // WIDGET_API_KEY de Vercel
-  USER_ID: "4ae48a03-3a43-4015-a106-3386b7966e24",   // Tu UUID de auth.users
-  // 👆👆👆 termina configuración 👆👆👆
+  API_KEY: "Bastian1920!",
+  USER_ID: "4ae48a03-3a43-4015-a106-3386b7966e24",
+  DEFAULT_TYPE: "expense",
+  MARK_AS_APPLE_PAY_WHEN_NOTIFIED: true,
 }
 
 // ============================================================
