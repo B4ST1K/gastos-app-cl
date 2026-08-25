@@ -36,6 +36,7 @@ Deno.serve(async (req) => {
     const contentType = (req.headers.get("content-type") ?? req.headers.get("Content-Type") ?? "").toLowerCase()
     const rawText = await req.text()
     const rawPreview = rawText.slice(0, 500)
+    console.log("gmail-webhook", req.method, "ct=", contentType || "(none)", "bytes=", rawText.length)
 
     let body: Record<string, unknown> = {}
     if (rawText && rawText.trim().length > 0) {
@@ -208,19 +209,22 @@ async function processOneAccount(
   }
 
   const userId = acc.user_id as string
-  const sinceHistoryId = (opts.historyId && acc.last_watch_history_id !== opts.historyId)
-    ? opts.historyId
-    : null
+  // Gmail notifica el historyId ACTUAL. history.list necesita el historyId ANTERIOR guardado.
+  const storedHistoryId = String(acc.last_watch_history_id ?? "").trim() || null
+  const startHistoryId =
+    storedHistoryId && opts.historyId && storedHistoryId !== opts.historyId
+      ? storedHistoryId
+      : null
 
   let messageIds: string[] = []
   let queryUsed = ""
 
-  if (sinceHistoryId) {
+  if (startHistoryId) {
     const q = new URLSearchParams({
-      startHistoryId: sinceHistoryId,
+      startHistoryId,
       historyTypes: "messageAdded",
     }).toString()
-    queryUsed = `history.list startHistoryId=${sinceHistoryId}`
+    queryUsed = `history.list startHistoryId=${startHistoryId}`
     const r = await fetch(
       `https://gmail.googleapis.com/gmail/v1/users/me/history?${q}`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -228,20 +232,29 @@ async function processOneAccount(
     const data = (await r.json()) as {
       history?: Array<{ messagesAdded?: Array<{ message: { id: string } }> }>
       historyId?: string
-      error?: unknown
+      error?: { code?: number; message?: string }
     }
-    if (data.error) throw new Error("Gmail history error: " + JSON.stringify(data.error))
-    for (const h of data.history ?? []) {
-      for (const m of h.messagesAdded ?? []) {
-        if (m?.message?.id && !messageIds.includes(m.message.id)) messageIds.push(m.message.id)
+    if (data.error) {
+      console.warn("Gmail history.list falló, fallback a messages.list:", data.error)
+      queryUsed += ` (error ${data.error.code ?? "?"} → fallback)`
+    } else {
+      for (const h of data.history ?? []) {
+        for (const m of h.messagesAdded ?? []) {
+          if (m?.message?.id && !messageIds.includes(m.message.id)) messageIds.push(m.message.id)
+        }
+      }
+      if (!opts.dryRun) {
+        await supabase.from("connected_accounts").update({
+          last_watch_history_id: data.historyId ?? opts.historyId ?? startHistoryId,
+          updated_at: now.toISOString(),
+        }).eq("id", acc.id)
       }
     }
-    if (!opts.dryRun) {
-      await supabase.from("connected_accounts").update({
-        last_watch_history_id: data.historyId ?? opts.historyId,
-        updated_at: now.toISOString(),
-      }).eq("id", acc.id)
-    }
+  } else if (opts.historyId && !opts.dryRun) {
+    await supabase.from("connected_accounts").update({
+      last_watch_history_id: opts.historyId,
+      updated_at: now.toISOString(),
+    }).eq("id", acc.id)
   }
 
   if (messageIds.length === 0) {

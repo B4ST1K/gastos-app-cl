@@ -6,8 +6,10 @@
 //   2. Rellena CONFIG abajo
 //   3. Guarda como "Añadir Gasto"
 //   4. En app Atajos (Shortcuts), crea un atajo que llame
-//      a "Run Scriptable Script" → "Añadir Gasto" y le pasa
-//      el texto de la notificación / banco como entrada.
+//   4. En Atajos: "Ejecutar script" → Añadir Gasto
+//      En "Parámetro" / "Input" pasa **Entrada del atajo**.
+//      Si es automatización de Wallet/Apple Pay, esa entrada es el cobro.
+//      Si no pasas el parámetro, Scriptable no ve el monto.
 //
 // Formatos que auto-detecta el parser (extensión CL):
 //   • "Pagaste $ 12.990 en UNIMARC SUC 123"
@@ -28,6 +30,9 @@ const CONFIG = {
   DEFAULT_TYPE: "expense",              // expense o income
   DEFAULT_PAYMENT_METHOD: "",           // vacío = deducir / Débito
   MARK_AS_APPLE_PAY_WHEN_NOTIFIED: true, // si viene de notificación → marcar como Apple Pay
+  // En atajos automáticos (Apple Pay) el Alert a veces no aparece / se come la entrada.
+  // Si ya hay monto, guarda sin preguntar.
+  CONFIRM_IF_PARSED: false,
 }
 
 const cleanAppUrl = CONFIG.APP_URL.replace(/\/+$/, "")
@@ -151,46 +156,155 @@ async function pushTransaction({ amount, merchant, description, type, payment_me
 // Interfaz: si recibe args desde Atajo o desde Scriptable
 // ============================================================
 
-const DEBUG = false // 👈 Pon en TRUE para ver pop-up de qué datos se recibieron (luego vuelve a FALSE)
+const DEBUG = false // 👈 TRUE una vez para ver qué llega desde el atajo; luego FALSE
+
+function asText(v) {
+  if (v == null) return ""
+  if (typeof v === "string") return v
+  if (typeof v === "number" || typeof v === "boolean") return String(v)
+  if (Array.isArray(v)) return v.map(asText).filter(Boolean).join("\n")
+  try { return JSON.stringify(v) } catch { return String(v) }
+}
+
+function pickDictValue(obj, keys) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return ""
+  const entries = Object.keys(obj)
+  for (const want of keys) {
+    const hit = entries.find((k) => k.toLowerCase().replace(/\s+/g, "") === want)
+    if (hit && obj[hit] != null && String(obj[hit]).trim()) return obj[hit]
+  }
+  return ""
+}
+
+function walletFromObject(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null
+  const wrapKeys = ["transaction", "transaccion", "wallet", "payment", "data", "result"]
+  const wrap = Object.keys(obj).find((k) => wrapKeys.includes(k.toLowerCase()) && obj[k] && typeof obj[k] === "object")
+  if (wrap) obj = obj[wrap]
+
+  const amountRaw = pickDictValue(obj, [
+    "amount", "monto", "importe", "cantidad", "value", "total", "transactionamount",
+  ])
+  let merchantRaw = pickDictValue(obj, [
+    "merchant", "comercio", "name", "nombre", "title", "payee", "vendor", "store", "businessname",
+  ])
+  if (merchantRaw && typeof merchantRaw === "object") {
+    merchantRaw = pickDictValue(merchantRaw, ["name", "nombre", "title", "merchant"]) || asText(merchantRaw)
+  }
+  const extra = pickDictValue(obj, [
+    "card", "tarjeta", "description", "descripcion", "note", "body", "text", "subtitle",
+  ])
+  let amount = 0
+  if (typeof amountRaw === "number" && amountRaw > 0) amount = Math.round(amountRaw)
+  else amount = extractAmount(asText(amountRaw) + " " + asText(obj))
+  const merchant = merchantRaw
+    ? titleize(cleanStopWords(String(merchantRaw).trim()))
+    : extractMerchant(asText(obj))
+  if (!amount && !merchantRaw) return null
+  return {
+    amount,
+    merchant: merchant || "Apple Pay",
+    description: [asText(merchantRaw), asText(amountRaw), asText(extra)].filter(Boolean).join(" · ").slice(0, 300),
+  }
+}
+
+function collectShortcutInput() {
+  const out = { input: "", src: "none", wallet: null, debug: "" }
+  if (typeof args === "undefined" || !args) return out
+
+  const bits = []
+  try {
+    bits.push("shortcutParameter=" + typeof args.shortcutParameter + " " + asText(args.shortcutParameter).slice(0, 180))
+  } catch {}
+  try { bits.push("plainTexts=" + asText(args.plainTexts).slice(0, 120)) } catch {}
+  try { bits.push("urls=" + asText(args.urls).slice(0, 80)) } catch {}
+  out.debug = bits.join("\n")
+
+  // 1) Atajos: "Ejecutar script" → parámetro = Entrada del atajo
+  if (args.shortcutParameter != null && args.shortcutParameter !== "") {
+    const sp = args.shortcutParameter
+    const wallet = typeof sp === "object" ? walletFromObject(sp) : walletFromObject(tryParseJson(sp))
+    if (wallet && wallet.amount > 0) {
+      out.wallet = wallet
+      out.input = [wallet.merchant, "$" + wallet.amount, wallet.description].filter(Boolean).join(" ")
+      out.src = "args.shortcutParameter"
+      return out
+    }
+    const text = asText(sp).trim()
+    if (text && text !== "{}" && text !== "[object Object]") {
+      out.input = text
+      out.src = "args.shortcutParameter"
+      return out
+    }
+  }
+
+  // 2) Share Sheet (plural: plainTexts, no plainText)
+  if (args.plainTexts && args.plainTexts.length > 0) {
+    const text = args.plainTexts.map(asText).filter(Boolean).join("\n").trim()
+    if (text) {
+      out.input = text
+      out.src = "args.plainTexts"
+      return out
+    }
+  }
+
+  if (args.urls && args.urls.length > 0) {
+    const text = args.urls.map(asText).filter(Boolean).join("\n").trim()
+    if (text) {
+      out.input = text
+      out.src = "args.urls"
+      return out
+    }
+  }
+
+  const qp = args.queryParameters || {}
+  const qpText = asText(qp.text || qp.notification || qp.input || "")
+  if (qpText.trim()) {
+    out.input = qpText.trim()
+    out.src = "args.queryParameters"
+    return out
+  }
+
+  if (args.widgetParameter && String(args.widgetParameter).trim()) {
+    out.input = String(args.widgetParameter).trim()
+    out.src = "args.widgetParameter"
+    return out
+  }
+
+  if (args.fileURLs && args.fileURLs.length > 0) {
+    try {
+      const fm = FileManager.local()
+      const text = args.fileURLs.map((u) => { try { return fm.readString(u) } catch { return "" } }).join("\n").trim()
+      if (text) {
+        out.input = text
+        out.src = "args.fileURLs"
+        return out
+      }
+    } catch {}
+  }
+
+  return out
+}
+
+function tryParseJson(s) {
+  if (typeof s !== "string") return null
+  const t = s.trim()
+  if (!t.startsWith("{") && !t.startsWith("[")) return null
+  try { return JSON.parse(t) } catch { return null }
+}
 
 async function main() {
-  // 1) Obtener entrada DESDE TODAS LAS FUENTES POSIBLES (en orden de prioridad)
   let input = ""
   let isNotification = false
   let source = "iphone-shortcut"
   let inputSrc = "none"
+  let wallet = null
 
-  // Método A: args desde Shortcut (Run Script con parámetro / Share Sheet)
-  if (args) {
-    const pt = args.plainText ? String(args.plainText) : ""
-    const qpText = args.queryParameters ? String(args.queryParameters.text || args.queryParameters.notification || "") : ""
-    const wpText = args.widgetParameter ? String(args.widgetParameter) : ""
-    const bpText = args.bookmarkPath ? String(args.bookmarkPath) : ""
+  const fromArgs = collectShortcutInput()
+  input = fromArgs.input
+  inputSrc = fromArgs.src
+  wallet = fromArgs.wallet
 
-    if (pt.trim().length > 0) {
-      input = pt.trim()
-      inputSrc = "args.plainText"
-    } else if (qpText.trim().length > 0) {
-      input = qpText.trim()
-      inputSrc = "args.queryParameters"
-    } else if (wpText.trim().length > 0) {
-      input = wpText.trim()
-      inputSrc = "args.widgetParameter"
-    } else if (bpText.trim().length > 0) {
-      input = bpText.trim()
-      inputSrc = "args.bookmarkPath"
-    }
-
-    if (args.fileURLs && args.fileURLs.length > 0 && !input) {
-      try {
-        const fm = FileManager.local()
-        input = args.fileURLs.map((u) => { try { return fm.readString(u) } catch { return "" } }).join("\n").trim()
-        if (input) inputSrc = "args.fileURLs"
-      } catch {}
-    }
-  }
-
-  // Método B: PORTAPAPELES (CLIPBOARD) — el MÁS FIABLE si viene de compartir / copiar
   if (!input) {
     try {
       const clip = Pasteboard.pasteString()
@@ -203,25 +317,30 @@ async function main() {
 
   if (input && input.length > 0) {
     isNotification = true
-    source = inputSrc === "clipboard" ? "iphone-clipboard" : "iphone-notification"
+    source = inputSrc === "clipboard" ? "iphone-clipboard" : "iphone-shortcut"
   }
 
   if (DEBUG) {
     const a = new Alert()
     a.title = "DEBUG: Input recibido"
-    a.message = `src=${inputSrc}\nlen=${input.length}\n\n---\n${(input || "(vacio)").slice(0, 400)}`
+    a.message = `src=${inputSrc}\nlen=${input.length}\nwallet=${wallet ? JSON.stringify(wallet) : "null"}\n\n${fromArgs.debug}\n\n---\n${(input || "(vacio)").slice(0, 400)}`
     a.addAction("OK")
     await a.presentAlert()
   }
 
-  // 2) Parsear si hay input o pedir datos
   let amount = 0
   let merchant = ""
   let description = null
   let type = CONFIG.DEFAULT_TYPE || "expense"
   let payment_method = ""
 
-  if (input && input.trim().length > 0) {
+  if (wallet && wallet.amount > 0) {
+    amount = wallet.amount
+    merchant = wallet.merchant || "Apple Pay"
+    description = wallet.description || input.slice(0, 300)
+    type = detectType(input)
+    payment_method = detectPaymentMethod(input, true)
+  } else if (input && input.trim().length > 0) {
     amount = extractAmount(input)
     merchant = extractMerchant(input)
     type = detectType(input)
@@ -229,8 +348,11 @@ async function main() {
     description = input.length > 10 ? input.slice(0, 300) : null
   }
 
-  // 3) Confirmación interactiva (siempre dentro de Scriptable, o si faltan datos)
-  if (true) {
+  const fromShortcut = inputSrc === "args.shortcutParameter" || inputSrc === "args.plainTexts"
+  const parsedOk = amount > 0 && !!merchant
+  const needConfirm = CONFIG.CONFIRM_IF_PARSED || !parsedOk || !fromShortcut
+
+  if (needConfirm) {
     const q = new Alert()
     q.title = source.includes("notific") || source === "iphone-clipboard"
       ? (inputSrc === "clipboard" ? "Añadir desde portapapeles" : "Añadir desde notificación")
@@ -253,6 +375,8 @@ async function main() {
     description = (q.textFieldValue(2) || "").trim() || null
     if (!payment_method) payment_method = CONFIG.DEFAULT_PAYMENT_METHOD || "Débito"
   }
+
+  if (!payment_method) payment_method = CONFIG.DEFAULT_PAYMENT_METHOD || "Débito"
 
   if (!amount || amount <= 0) throw new Error("Monto inválido: " + amount)
   if (!merchant) merchant = "Gasto Manual"

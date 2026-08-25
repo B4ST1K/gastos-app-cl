@@ -10,6 +10,7 @@ import {
   getCategoryColor,
   getCategoryName,
 } from '@/lib/types'
+import { getBillingPeriod, BILLING_DAY_DEFAULT } from '@/lib/billing'
 import Header from './Header'
 import SummaryCards from './SummaryCards'
 import ExpensePieChart from './ExpensePieChart'
@@ -27,6 +28,10 @@ export default function Dashboard({ userEmail, userId }: DashboardProps) {
   const [categories, setCategories] = useState<Category[]>([])
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([])
   const [loading, setLoading] = useState(true)
+
+  const billingPeriod = useMemo(() => getBillingPeriod(BILLING_DAY_DEFAULT), [])
+  const periodFrom = billingPeriod.iso.start.slice(0, 10)
+  const periodTo = billingPeriod.iso.end.slice(0, 10)
 
   const loadAll = useCallback(async () => {
     setLoading(true)
@@ -97,6 +102,15 @@ export default function Dashboard({ userEmail, userId }: DashboardProps) {
     [transactions, categoriesMap, paymentMethodsMap]
   )
 
+  const joinedInPeriod = useMemo(
+    () =>
+      joined.filter((tx) => {
+        const d = tx.transaction_date.slice(0, 10)
+        return d >= periodFrom && d <= periodTo
+      }),
+    [joined, periodFrom, periodTo]
+  )
+
   async function handleDelete(id: string) {
     const { error } = await supabase.from('transactions').delete().eq('id', id)
     if (!error) {
@@ -104,11 +118,26 @@ export default function Dashboard({ userEmail, userId }: DashboardProps) {
     }
   }
 
-  const totalIncome = joined
+  async function handleUpdate(id: string, patch: Partial<Pick<Transaction, 'amount' | 'merchant' | 'category_id'>>) {
+    const { error, data } = await supabase
+      .from('transactions')
+      .update(patch)
+      .eq('id', id)
+      .select('*')
+      .single()
+    if (!error && data) {
+      setTransactions((prev) =>
+        prev.map((t) => (t.id === id ? ({ ...t, ...data } as Transaction) : t))
+      )
+    }
+    return { error, data }
+  }
+
+  const totalIncome = joinedInPeriod
     .filter((t) => t.type === 'income')
     .reduce((sum, t) => sum + Number(t.amount), 0)
 
-  const totalExpenses = joined
+  const totalExpenses = joinedInPeriod
     .filter((t) => t.type === 'expense')
     .reduce((sum, t) => sum + Number(t.amount), 0)
 
@@ -116,7 +145,7 @@ export default function Dashboard({ userEmail, userId }: DashboardProps) {
 
   const expenseByCategory = useMemo(() => {
     const byId = new Map<string, number>()
-    joined
+    joinedInPeriod
       .filter((t) => t.type === 'expense')
       .forEach((t) => {
         const key = t.category_id ?? '__uncategorized__'
@@ -134,9 +163,9 @@ export default function Dashboard({ userEmail, userId }: DashboardProps) {
       })
     })
     return arr.sort((a, b) => b.value - a.value)
-  }, [joined, categoriesMap])
+  }, [joinedInPeriod, categoriesMap])
 
-  const recentTransactions = joined.slice(0, 10)
+  const recentTransactions = joinedInPeriod.slice(0, 10)
 
   if (loading) {
     return (
@@ -157,8 +186,15 @@ export default function Dashboard({ userEmail, userId }: DashboardProps) {
 
       <main className="mx-auto max-w-7xl px-6 py-8">
         <div className="mb-8">
-          <h2 className="text-2xl font-bold text-gray-900">Panel de Control</h2>
-          <p className="mt-1 text-gray-500">Resumen de tus finanzas personales</p>
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">Panel de Control</h2>
+              <p className="mt-1 text-gray-500">Resumen de tus finanzas personales</p>
+            </div>
+            <div className="inline-flex items-center rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-200">
+              Período: {billingPeriod.label}
+            </div>
+          </div>
         </div>
 
         <div className="mb-8">
@@ -174,7 +210,9 @@ export default function Dashboard({ userEmail, userId }: DashboardProps) {
             <ExpensePieChart data={expenseByCategory} />
             <TransactionList
               transactions={recentTransactions}
+              categories={categories}
               onDelete={handleDelete}
+              onUpdate={handleUpdate}
             />
           </div>
 
