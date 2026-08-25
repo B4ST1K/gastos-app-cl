@@ -6,7 +6,8 @@ export async function updateSession(request: NextRequest) {
 
   const isPublicApi =
     pathname.startsWith('/api/widget-summary') ||
-    pathname.startsWith('/api/transaction')
+    pathname.startsWith('/api/transaction') ||
+    pathname.startsWith('/api/log')
 
   const isAuthPage =
     pathname.startsWith('/login') ||
